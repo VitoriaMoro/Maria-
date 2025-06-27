@@ -1,63 +1,104 @@
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import plotly.express as px
 import matplotlib.pyplot as plt
 
 # Carregar os dados
-data = pd.read_csv("pet_adoption_center.csv")
+@st.cache_data
+def load_data():
+    df = pd.read_csv('pet_adoption_center.csv')
+    
+    # Converter datas
+    df['arrival_date'] = pd.to_datetime(df['arrival_date'])
+    df['adoption_date'] = pd.to_datetime(df['adoption_date'])
+    
+    # Calcular tempo até adoção (em dias)
+    df['days_to_adopt'] = (df['adoption_date'] - df['arrival_date']).dt.days
+    
+    return df
 
-# Calcular taxas de adoção por raça
-breed_stats = data.groupby('breed').agg(
-    total_pets=('pet_id', 'count'),
-    adopted_pets=('adopted', 'sum')
-).reset_index()
+df = load_data()
 
-# Calcular taxa de adoção e filtrar raças com pelo menos 5 animais
-breed_stats['adoption_rate'] = breed_stats['adopted_pets'] / breed_stats['total_pets']
-filtered_breeds = breed_stats[breed_stats['total_pets'] >= 5]
-
-# Ordenar por taxa de adoção
-filtered_breeds = filtered_breeds.sort_values('adoption_rate', ascending=False)
-
-# Configurar o Streamlit
-st.title("Taxas de Adoção por Raça de Animal")
-st.write("""
-Esta análise mostra as taxas de adoção para diferentes raças de animais no centro de adoção.
-Apenas raças com pelo menos 5 animais estão incluídas para maior precisão estatística.
-""")
-
-# Criar gráfico
-plt.figure(figsize=(12, 8))
-bars = plt.barh(
-    filtered_breeds['breed'], 
-    filtered_breeds['adoption_rate'],
-    color='skyblue'
+# Sidebar com filtros
+st.sidebar.header('Filtros')
+species_filter = st.sidebar.multiselect(
+    'Espécie',
+    options=df['species'].unique(),
+    default=df['species'].unique()
 )
 
-# Adicionar rótulos de dados
-for bar in bars:
-    width = bar.get_width()
-    plt.text(
-        width + 0.01, 
-        bar.get_y() + bar.get_height()/2, 
-        f'{width:.0%}',
-        va='center'
-    )
+status_filter = st.sidebar.radio(
+    'Status de Adoção',
+    options=['Todos', 'Adotados', 'Não Adotados']
+)
 
-plt.xlabel('Taxa de Adoção')
-plt.ylabel('Raça')
-plt.title('Taxas de Adoção por Raça (com pelo menos 5 animais)')
-plt.xlim(0, 1.1)
-plt.grid(axis='x', linestyle='--', alpha=0.7)
-plt.gca().invert_yaxis()  # Mostrar maior taxa no topo
+# Aplicar filtros
+filtered_df = df[df['species'].isin(species_filter)]
 
-# Mostrar no Streamlit
-st.pyplot(plt)
+if status_filter == 'Adotados':
+    filtered_df = filtered_df[filtered_df['adopted'] == True]
+elif status_filter == 'Não Adotados':
+    filtered_df = filtered_df[filtered_df['adopted'] == False]
 
-# Mostrar tabela com dados detalhados
-st.subheader("Dados Detalhados")
-st.dataframe(filtered_breeds.style.format({
-    'adoption_rate': '{:.0%}',
-    'total_pets': '{:.0f}',
-    'adopted_pets': '{:.0f}'
-}))
+# Layout principal
+st.title('📊 Análise de Centro de Adoção de Pets')
+st.markdown('---')
+
+# Métricas principais
+col1, col2, col3 = st.columns(3)
+col1.metric('Total de Pets', len(filtered_df))
+col2.metric('Taxa de Adoção', 
+            f"{filtered_df['adopted'].mean()*100:.1f}%" if len(filtered_df) > 0 else '0%')
+col3.metric('Tempo Médio para Adoção', 
+            f"{filtered_df['days_to_adopt'].mean():.1f} dias" if len(filtered_df[filtered_df['adopted']]) > 0 else 'N/A')
+
+# Gráfico 1: Distribuição por Espécie
+st.subheader('Distribuição por Espécie')
+fig1 = px.pie(
+    filtered_df,
+    names='species',
+    hole=0.3,
+    color_discrete_sequence=px.colors.qualitative.Pastel
+)
+st.plotly_chart(fig1, use_container_width=True)
+
+# Gráfico 2: Status de Adoção por Espécie
+st.subheader('Status de Adoção por Espécie')
+adoption_counts = filtered_df.groupby(['species', 'adopted']).size().unstack().fillna(0)
+adoption_counts = adoption_counts.rename(columns={True: 'Adotados', False: 'Não Adotados'})
+
+fig2, ax = plt.subplots()
+adoption_counts.plot(kind='bar', stacked=True, ax=ax, color=['#4CAF50', '#F44336'])
+ax.set_ylabel('Quantidade')
+ax.legend(title='Status')
+st.pyplot(fig2)
+
+# Gráfico 3: Distribuição de Idades
+st.subheader('Distribuição de Idades')
+fig3 = px.histogram(
+    filtered_df,
+    x='age_years',
+    nbins=20,
+    color='species',
+    barmode='overlay',
+    opacity=0.7,
+    labels={'age_years': 'Idade (anos)'}
+)
+st.plotly_chart(fig3, use_container_width=True)
+
+# Gráfico 4: Top 10 Raças Mais Comuns
+st.subheader('Raças Mais Populares')
+top_breeds = filtered_df['breed'].value_counts().head(10)
+fig4 = px.bar(
+    top_breeds,
+    orientation='v',
+    labels={'value': 'Quantidade', 'index': 'Raça'},
+    color=top_breeds.values,
+    color_continuous_scale='Blues'
+)
+st.plotly_chart(fig4, use_container_width=True)
+
+# Tabela com dados brutos
+st.subheader('Dados Completos')
+st.dataframe(filtered_df)
 
